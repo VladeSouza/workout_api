@@ -29,6 +29,12 @@ pyenv virtualenv 3.11.4 workoutapi
 pyenv activate workoutapi
 pip install -r requirements.txt
 ```
+- OBS:
+    - [Mais detalhe Pyenv clique aqui](./docs/pyenv.md)
+
+### Caso queira usar o Poetry
+- [Detalhes usando o Poetry clique aqui](./docs/poetry.md)
+
 Para subir o banco de dados, caso não tenha o [docker-compose](https://docs.docker.com/compose/install/linux/) instalado, faça a instalação e logo em seguida, execute:
 
 ```bash

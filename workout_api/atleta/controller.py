@@ -1,15 +1,19 @@
 from datetime import datetime
 from uuid import uuid4
-from fastapi import APIRouter, Body, HTTPException, status
+from fastapi import APIRouter, Query, Body, HTTPException, status, Depends
 from pydantic import UUID4
 
-from workout_api.atleta.schemas import AtletaIn, AtletaOut, AtletaUpdate
+from workout_api.atleta.schemas import GetAll, AtletaIn, AtletaOut, AtletaUpdate
 from workout_api.atleta.models import AtletaModel
 from workout_api.categorias.models import CategoriaModel
 from workout_api.centro_treinamento.models import CentroTreinamentoModel
 
 from workout_api.contrib.dependencies import DatabaseDependency
 from sqlalchemy.future import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
+
+from fastapi_pagination import Page, paginate, Params
 
 router = APIRouter()
 
@@ -54,6 +58,18 @@ async def post(
         
         db_session.add(atleta_model)
         await db_session.commit()
+    except IntegrityError as e:
+        # Verifica se a exceção é devido à violação de integridade (duplicidade de CPF)
+        if 'duplicate key value' in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_303_SEE_OTHER, 
+                detail=f'Já existe um atleta cadastrado com o CPF: {atleta_in.cpf}'
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+                detail='Ocorreu um erro ao inserir os dados no banco'
+            )
     except Exception:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
@@ -67,13 +83,93 @@ async def post(
     '/', 
     summary='Consultar todos os Atletas',
     status_code=status.HTTP_200_OK,
-    response_model=list[AtletaOut],
+    response_model=Page[GetAll],
 )
-async def query(db_session: DatabaseDependency) -> list[AtletaOut]:
-    atletas: list[AtletaOut] = (await db_session.execute(select(AtletaModel))).scalars().all()
+# async def query_with_pagination(
+#     db_session: DatabaseDependency, 
+#     params: Params = Depends(),
+# ) -> Page[GetAll]:
+#     atletas_query = select(AtletaModel)
+#     atletas = (await db_session.execute(atletas_query)).scalars().all()
     
-    return [AtletaOut.model_validate(atleta) for atleta in atletas]
+#     return paginate(atletas, params)
+async def query_with_pagination(
+    db_session: DatabaseDependency, 
+    limit: int = Query(10, ge=1, le=100, description="Número máximo de itens por página"),
+    offset: int = Query(0, ge=0, description="Número de itens a serem pulados")
+) -> Page[GetAll]:
+    params = Params(page=offset // limit + 1, size=limit)
+    atletas_query = select(AtletaModel).offset(offset).limit(limit)
+    atletas = (await db_session.execute(atletas_query)).scalars().all()
+    
+    return paginate(atletas, params)
 
+@router.get(
+    '/nome', 
+    summary='Buscar Atletas por Nome',
+    status_code=status.HTTP_200_OK,
+    response_model=AtletaOut,
+)
+async def get_by_nome(db_session: DatabaseDependency, nome: str = Query(..., description="Nome do atleta")) -> list[AtletaOut]:
+    atleta: AtletaOut = (
+        await db_session.execute(select(AtletaModel).filter(AtletaModel.nome.like(f"%{nome}%")))
+    ).scalars().first()
+    
+    if not atleta:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f'Atleta não encontrado com o Nome: {nome}'
+        )
+    
+    return atleta
+
+@router.get(
+    '/cpf', 
+    summary='Consulta um Atleta pelo CPF',
+    status_code=status.HTTP_200_OK,
+    response_model=AtletaOut,
+)
+async def get_by_cpf(db_session: DatabaseDependency, cpf: str = Query(..., description="CPF do atleta")) -> AtletaOut:
+    atleta: AtletaOut = (
+        await db_session.execute(select(AtletaModel).filter_by(cpf=cpf))
+    ).scalars().first()
+
+    if not atleta:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, 
+            detail=f'Atleta não encontrado com o CPF: {cpf}'
+        )
+    
+    return atleta
+
+# @router.get(
+#     '/buscar', 
+#     summary='Consulta um Atleta pelo Nome ou CPF',
+#     status_code=status.HTTP_200_OK,
+#     response_model=AtletaOut,
+# )
+# async def get_atleta_by_name_or_cpf(db_session: DatabaseDependency, query: str = Query(..., description="Nome ou CPF do atleta")) -> AtletaOut:
+#     # Verifica se o query é um CPF válido
+#     if query.isdigit() and len(query) == 11:
+#         atleta_by_cpf: AtletaOut = (
+#             await db_session.execute(select(AtletaModel).filter_by(cpf=query))
+#         ).scalars().first()
+        
+#         if atleta_by_cpf:
+#             return atleta_by_cpf
+    
+#     # Se não for um CPF válido ou se não encontrou um atleta pelo CPF, tenta buscar pelo nome
+#     atleta_by_nome: AtletaOut = (
+#         await db_session.execute(select(AtletaModel).filter(AtletaModel.nome.ilike(f'%{query}%')))
+#     ).scalars().first()
+    
+#     if not atleta_by_nome:
+#         raise HTTPException(
+#             status_code=status.HTTP_404_NOT_FOUND, 
+#             detail=f'Nenhum atleta encontrado com o nome ou CPF: {query}'
+#         )
+
+#     return atleta_by_nome
 
 @router.get(
     '/{id}', 
